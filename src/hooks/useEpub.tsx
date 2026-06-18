@@ -529,6 +529,12 @@ export default function useEpub() {
         ];
 
         const protectedRules: string[] = [];
+        const protectedDeclarations: string[] = [];
+        const selectorContainsHeading = (selector: string): boolean => (
+            selector
+                .split(",")
+                .some((part) => /(^|[\s>+~])h[1-6](?=[:.#[\s>+~]|$)/i.test(part.trim()))
+        );
         const shouldProtectRule = (selector: string): boolean => (
             selector
                 .split(",")
@@ -551,6 +557,21 @@ export default function useEpub() {
             return placeholder;
         });
 
+        // Preserve explicit heading alignment from the EPUB stylesheet. The reader strips most
+        // text-align rules so body text stays justified, but generated chapter headings rely on
+        // h1/h2 { text-align: center; } and otherwise inherit .bok-reader-container's justify.
+        css = css.replace(/([^{}@]+)\{([^{}]*)\}/g, (rule, selector: string, declarations: string) => {
+            if (!selectorContainsHeading(selector)) return rule;
+
+            const preservedDeclarations = declarations.replace(/text-align\s*:[^;{}]*;?/gi, (declaration) => {
+                const placeholder = `__BOK_PROTECTED_CSS_DECL_${protectedDeclarations.length}__`;
+                protectedDeclarations.push(declaration.endsWith(";") ? declaration : `${declaration};`);
+                return placeholder;
+            });
+
+            return `${selector}{${preservedDeclarations}}`;
+        });
+
         css = css.replace(/(^|[^.#\w-])(html|body)(?![\w-])/gi, "butt-sex-masterr");
 
         for (const prop of enemiesOfTheState) {
@@ -560,6 +581,7 @@ export default function useEpub() {
         }
 
         css = css.replace(/__BOK_PROTECTED_CSS_RULE_(\d+)__/g, (_, index: string) => protectedRules[Number(index)] ?? "");
+        css = css.replace(/__BOK_PROTECTED_CSS_DECL_(\d+)__/g, (_, index: string) => protectedDeclarations[Number(index)] ?? "");
 
         css = css.replace(/[^{}@]+\{\s*\}/g, '');
         css = css.replace(/@media[^{]*\{\s*\}/g, '');
