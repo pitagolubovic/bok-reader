@@ -6,5 +6,6 @@ export type {
     BokReaderSyncEvent,
     BokReaderSyncSnapshot,
     BokReaderSyncState,
+    PageTurnAnimation,
     Theme
 } from "./components/BokReader/BokReader";

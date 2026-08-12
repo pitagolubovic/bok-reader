@@ -28,7 +28,10 @@ import {
     hasProgressConflict,
     listPendingSyncEvents
 } from "./syncUtils";
+import { DEFAULT_PAGE_TURN_ANIMATION, isPageTurnAnimation } from "./pageTurnAnimations";
 import "./BokReader.css";
+
+export type { PageTurnAnimation } from "./pageTurnAnimations";
 
 export interface Theme {
     "--bg-color": string,
@@ -170,6 +173,10 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
     const [lineHeight, setLineHeight] = usePersistentState<number>("bok_global_line_height", 1.5);
     const [fontFamily, setFontFamily] = usePersistentState<string>("bok_global_font_family", defaultFontFamily);
     const [theme, setTheme] = usePersistentState<string>("bok_global_theme", "Amoled Dark");
+    const [storedPageTurnAnimation, setStoredPageTurnAnimation] = usePersistentState<string>(
+        "bok_global_page_turn_animation",
+        DEFAULT_PAGE_TURN_ANIMATION
+    );
 
     const [highlights, setHighlights] = useState<Highlight[]>([]);
     const [noteEditorHighlightId, setNoteEditorHighlightId] = useState<string | null>(null);
@@ -196,6 +203,9 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
     const bottomMenuLockUntilRef = useRef(0);
 
     const effectiveTheme = (allThemes as { [key: string]: Theme })[theme] ? theme : "Amoled Dark";
+    const pageTurnAnimation = isPageTurnAnimation(storedPageTurnAnimation)
+        ? storedPageTurnAnimation
+        : DEFAULT_PAGE_TURN_ANIMATION;
     const highlightsStorageKey = bookId ? `bok_highlights_${bookId}` : "";
     const legacyHighlightsStorageKey = title && title !== "Loading..."
         ? `bok_highlights_${title}`
@@ -689,6 +699,7 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
                         topPadding={topPadding}
                         sidePadding={sidePadding}
                         fontFamily={fontFamily}
+                        pageTurnAnimation={pageTurnAnimation}
                         isOptionMenuVisible={activeMenu !== "none"}
                         containerElementRef={bokReaderWrapperRef}
                         showTutorial={showTutorial}
@@ -712,12 +723,14 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
                             padding={sidePadding}
                             fontFamily={fontFamily}
                             theme={theme}
+                            pageTurnAnimation={pageTurnAnimation}
                             setTopPadding={setTopPadding}
                             setPadding={setSidePadding}
                             setFontSize={setFontSize}
                             setLineHeight={setLineHeight}
                             setFontFamily={setFontFamily}
                             setTheme={setTheme}
+                            setPageTurnAnimation={setStoredPageTurnAnimation}
                             allThemes={allThemes}
                             supportedFonts={supportedFonts}
                         />

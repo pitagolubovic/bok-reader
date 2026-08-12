@@ -3,6 +3,11 @@ import toggleFullscreen from "../../helpful_functions/toggleFullscreen";
 import useBottomMenuAnimation from "../../hooks/useBottomMenuAnimation";
 import styles from "./OptionsMenu.module.css";
 import { Theme } from "../BokReader/BokReader.tsx";
+import {
+    PAGE_TURN_ANIMATION_OPTIONS,
+    isPageTurnAnimation,
+    type PageTurnAnimation
+} from "../BokReader/pageTurnAnimations";
 import CustomDropdown, { DropdownOption } from "../CustomDropdown/CustomDropdown";
 
 interface OptionsMenuProps {
@@ -13,12 +18,14 @@ interface OptionsMenuProps {
     padding: number;
     fontFamily: string;
     theme: string;
+    pageTurnAnimation: PageTurnAnimation;
     setFontSize: React.Dispatch<React.SetStateAction<number>>;
     setLineHeight: React.Dispatch<React.SetStateAction<number>>;
     setTopPadding: React.Dispatch<React.SetStateAction<number>>;
     setPadding: React.Dispatch<React.SetStateAction<number>>;
     setFontFamily: React.Dispatch<React.SetStateAction<string>>;
     setTheme: React.Dispatch<React.SetStateAction<string>>;
+    setPageTurnAnimation: (animation: PageTurnAnimation) => void;
     supportedFonts: { displayName: string; name: string }[];
     allThemes: { [key: string]: Theme }
 }
@@ -31,11 +38,13 @@ function OptionsMenu({
     padding,
     fontFamily,
     theme,
+    pageTurnAnimation,
     setFontSize,
     setLineHeight,
     setTopPadding,
     setPadding,
     setTheme,
+    setPageTurnAnimation,
     setFontFamily,
     supportedFonts = [],
     allThemes
@@ -57,6 +66,10 @@ function OptionsMenu({
     const allThemesArray = Object.keys(allThemes)
     const fontOptions: DropdownOption[] = allFonts.map((font) => ({ label: font.displayName, value: font.name }));
     const themeOptions: DropdownOption[] = allThemesArray.map((themeName) => ({ label: themeName, value: themeName }));
+    const pageTurnAnimationOptions: DropdownOption[] = PAGE_TURN_ANIMATION_OPTIONS.map((option) => ({
+        label: option.label,
+        value: option.value
+    }));
 
     const handleOverlayClick = useCallback(() => {
         closeMenu();
@@ -69,6 +82,12 @@ function OptionsMenu({
     const handleContextMenu = useCallback((event: React.MouseEvent) => {
         event.preventDefault();
     }, []);
+
+    const handlePageTurnAnimationChange = useCallback((value: string) => {
+        if (isPageTurnAnimation(value)) {
+            setPageTurnAnimation(value);
+        }
+    }, [setPageTurnAnimation]);
 
     const animateValue = useCallback((ref: React.RefObject<HTMLSpanElement | null>) => {
         if (ref.current) {
@@ -192,6 +211,17 @@ function OptionsMenu({
                             value={theme}
                             onChange={setTheme}
                             ariaLabel="Select color scheme"
+                        />
+                    </div>
+
+                    {/* Page Turn Animation */}
+                    <div className={styles['option-row']}>
+                        <div className={styles['option-label']}>Page turn</div>
+                        <CustomDropdown
+                            options={pageTurnAnimationOptions}
+                            value={pageTurnAnimation}
+                            onChange={handlePageTurnAnimationChange}
+                            ariaLabel="Select page turn animation"
                         />
                     </div>
 

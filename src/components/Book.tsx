@@ -16,6 +16,7 @@ import useNavigation from "../hooks/useNavigation";
 import PageNumber from "./PageNumber/PageNumber";
 import { calculatePageOfElement } from "../helpful_functions/calculatePageOfElement";
 import Toast from "./Toast/Toast";
+import type { PageTurnAnimation } from "./BokReader/pageTurnAnimations";
 
 export interface BookHandle {
     goToPage: (page: number) => void;
@@ -57,6 +58,7 @@ const SELECTION_MENU_ESTIMATED_HEIGHT = 44;
 const ACTION_MENU_ESTIMATED_HEIGHT = 94;
 const SELECTION_MENU_ESTIMATED_WIDTH = 135;
 const ACTION_MENU_ESTIMATED_WIDTH = 240;
+const PAGE_TURN_ANIMATION_DURATION_MS = 340;
 
 const getMenuTopPosition = ({
     anchorTop,
@@ -128,6 +130,7 @@ interface PageProps {
     lineHeight: number;
     topPadding: number;
     fontFamily: string;
+    pageTurnAnimation: PageTurnAnimation;
     sidePadding: number;
     showTutorial: boolean;
     isOptionMenuVisible: boolean;
@@ -149,6 +152,72 @@ const easeOutBack = (x: number): number => {
     return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
 };
 
+const easeInOutCubic = (x: number): number => {
+    return x < 0.5
+        ? 4 * x * x * x
+        : 1 - Math.pow(-2 * x + 2, 3) / 2;
+};
+
+const prefersReducedMotion = (): boolean => {
+    return typeof window !== "undefined" &&
+        window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+};
+
+const getScrollSnapScale = (): number => {
+    if (typeof window === "undefined") return 1;
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    return Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+};
+
+const snapScrollPosition = (value: number, snapScale: number): number => {
+    return Math.round(value * snapScale) / snapScale;
+};
+
+const resetPageTurnEffect = (scrollContainer: HTMLElement) => {
+    scrollContainer.classList.remove("book-page--turning-3d");
+    scrollContainer.style.removeProperty("opacity");
+    scrollContainer.style.removeProperty("transform");
+    scrollContainer.style.removeProperty("transform-origin");
+    scrollContainer.style.removeProperty("filter");
+    scrollContainer.style.removeProperty("will-change");
+};
+
+const clearPageTurnOverlay = (overlayElement: HTMLElement | null) => {
+    if (!overlayElement) return;
+    overlayElement.classList.remove("page-turn-overlay--active");
+    overlayElement.replaceChildren();
+};
+
+const removeDuplicateIds = (element: HTMLElement) => {
+    element.removeAttribute("id");
+};
+
+const createPageTurnFace = ({
+    source,
+    className
+}: {
+    source: HTMLDivElement;
+    className: string;
+}): { face: HTMLDivElement; clone: HTMLDivElement } => {
+    const face = document.createElement("div");
+    face.className = `page-turn-face ${className}`;
+
+    const clone = source.cloneNode(true) as HTMLDivElement;
+    removeDuplicateIds(clone);
+    clone.classList.add("book-page--page-turn-clone");
+    clone.style.position = "absolute";
+    clone.style.inset = "0";
+    clone.style.width = "100%";
+    clone.style.height = "100%";
+    clone.style.maxHeight = `${source.clientHeight}px`;
+    clone.style.pointerEvents = "none";
+    clone.style.userSelect = "none";
+    clone.style.webkitUserSelect = "none";
+
+    face.appendChild(clone);
+    return { face, clone };
+};
+
 // 3. Use forwardRef
 const Book = forwardRef<BookHandle, PageProps>(({
     content,
@@ -161,6 +230,7 @@ const Book = forwardRef<BookHandle, PageProps>(({
     topPadding,
     sidePadding,
     fontFamily,
+    pageTurnAnimation,
     isOptionMenuVisible,
     containerElementRef,
     showTutorial,
@@ -175,6 +245,7 @@ const Book = forwardRef<BookHandle, PageProps>(({
     isHighlightNoteModalVisible
 }, ref) => {
     const bookRef = useRef<HTMLDivElement>(null);
+    const pageTurnOverlayRef = useRef<HTMLDivElement>(null);
     const initialLoadDoneRef = useRef(false);
     const selectionRangeRef = useRef<Range | null>(null);
     const selectionMenuTimestampRef = useRef<number>(0);
@@ -200,6 +271,18 @@ const Book = forwardRef<BookHandle, PageProps>(({
 
     const percentReadRef = useRef(percentRead);
     const animationRef = useRef<number | null>(null);
+
+    useEffect(() => {
+        const scrollContainer = bookRef.current;
+        if (animationRef.current) {
+            cancelAnimationFrame(animationRef.current);
+            animationRef.current = null;
+        }
+        if (scrollContainer) {
+            resetPageTurnEffect(scrollContainer);
+        }
+        clearPageTurnOverlay(pageTurnOverlayRef.current);
+    }, [pageTurnAnimation]);
 
     useEffect(() => {
         if (onPageCountChange) onPageCountChange(pageCount);
@@ -270,27 +353,118 @@ const Book = forwardRef<BookHandle, PageProps>(({
         const scrollContainer = bookRef.current;
         if (!scrollContainer) return;
 
-        if (animationRef.current) cancelAnimationFrame(animationRef.current);
+        if (animationRef.current) {
+            cancelAnimationFrame(animationRef.current);
+            animationRef.current = null;
+        }
+        resetPageTurnEffect(scrollContainer);
+        clearPageTurnOverlay(pageTurnOverlayRef.current);
 
         const start = scrollContainer.scrollLeft;
         const target = targetPage * pageWidth * noOfPages;
         const distance = target - start;
-        const duration = 450;
+
+        if (
+            pageTurnAnimation === "none" ||
+            prefersReducedMotion() ||
+            Math.abs(distance) < 1
+        ) {
+            scrollContainer.scrollLeft = target;
+            return;
+        }
+
+        const snapScale = getScrollSnapScale();
+        let lastAnimatedScrollLeft = Number.NaN;
+        const writeAnimatedScrollLeft = (value: number) => {
+            const snappedValue = snapScrollPosition(value, snapScale);
+            if (snappedValue === lastAnimatedScrollLeft) return;
+            scrollContainer.scrollLeft = snappedValue;
+            lastAnimatedScrollLeft = snappedValue;
+        };
+
+        if (pageTurnAnimation === "three-d") {
+            const overlayElement = pageTurnOverlayRef.current;
+            const containerRect = containerElementRef.current?.getBoundingClientRect() ?? scrollContainer.getBoundingClientRect();
+
+            if (!overlayElement || containerRect.width <= 0 || containerRect.height <= 0) {
+                scrollContainer.scrollLeft = target;
+                return;
+            }
+
+            const duration = PAGE_TURN_ANIMATION_DURATION_MS;
+            const direction = distance >= 0 ? 1 : -1;
+            const depth = containerRect.width / 2;
+            const startTime = performance.now();
+
+            const cube = document.createElement("div");
+            cube.className = "page-turn-cube";
+
+            const { face: outgoingFace, clone: outgoingClone } = createPageTurnFace({
+                source: scrollContainer,
+                className: "page-turn-face--outgoing"
+            });
+            const { face: incomingFace, clone: incomingClone } = createPageTurnFace({
+                source: scrollContainer,
+                className: "page-turn-face--incoming"
+            });
+
+            outgoingFace.style.transform = `rotateY(0deg) translateZ(${depth}px)`;
+            incomingFace.style.transform = `rotateY(${direction * 90}deg) translateZ(${depth}px)`;
+            cube.style.transform = `translateZ(${-depth}px) rotateY(0deg)`;
+            cube.append(outgoingFace, incomingFace);
+
+            overlayElement.replaceChildren(cube);
+            overlayElement.classList.add("page-turn-overlay--active");
+            scrollContainer.classList.add("book-page--turning-3d");
+            scrollContainer.style.opacity = "0";
+
+            outgoingClone.scrollLeft = start;
+            incomingClone.scrollLeft = target;
+            void overlayElement.offsetHeight;
+            outgoingClone.scrollLeft = start;
+            incomingClone.scrollLeft = target;
+
+            const animateCubeTurn = (currentTime: number) => {
+                const progress = Math.min(1, (currentTime - startTime) / duration);
+                const easedProgress = easeInOutCubic(progress);
+                const rotation = -direction * 90 * easedProgress;
+
+                cube.style.transform = `translateZ(${-depth}px) rotateY(${rotation}deg)`;
+
+                if (progress < 1) {
+                    animationRef.current = requestAnimationFrame(animateCubeTurn);
+                    return;
+                }
+
+                scrollContainer.scrollLeft = target;
+                resetPageTurnEffect(scrollContainer);
+                clearPageTurnOverlay(overlayElement);
+                animationRef.current = null;
+            };
+
+            animationRef.current = requestAnimationFrame(animateCubeTurn);
+            return;
+        }
+
+        scrollContainer.style.willChange = "scroll-position";
+
+        const duration = PAGE_TURN_ANIMATION_DURATION_MS;
         const startTime = performance.now();
 
         const animateScroll = (currentTime: number) => {
             const elapsed = currentTime - startTime;
             if (elapsed < duration) {
                 const ease = easeOutBack(elapsed / duration);
-                scrollContainer.scrollLeft = start + distance * ease;
+                writeAnimatedScrollLeft(start + distance * ease);
                 animationRef.current = requestAnimationFrame(animateScroll);
             } else {
                 scrollContainer.scrollLeft = target;
+                resetPageTurnEffect(scrollContainer);
                 animationRef.current = null;
             }
         };
         animationRef.current = requestAnimationFrame(animateScroll);
-    }, [pageWidth, noOfPages]);
+    }, [containerElementRef, pageTurnAnimation, pageWidth, noOfPages]);
 
     const goToPage = useCallback((targetPage: number) => {
         let safePage = targetPage;
@@ -527,8 +701,11 @@ const Book = forwardRef<BookHandle, PageProps>(({
         if (start > 0) {
             targetNode = textNode.splitText(start);
         }
-        if (end < targetNode.length) {
-            targetNode.splitText(end - start);
+        // After splitText(start), offsets are relative to targetNode,
+        // so the tail split must be guarded by (end - start), not end.
+        const relativeEnd = end - start;
+        if (relativeEnd < targetNode.length) {
+            targetNode.splitText(relativeEnd);
         }
 
         const span = document.createElement("span");
@@ -1066,7 +1243,12 @@ const Book = forwardRef<BookHandle, PageProps>(({
         }, 400);
         return () => {
             clearTimeout(timer);
-            if (animationRef.current) cancelAnimationFrame(animationRef.current);
+            if (animationRef.current) {
+                cancelAnimationFrame(animationRef.current);
+                animationRef.current = null;
+            }
+            resetPageTurnEffect(currentBookRef);
+            clearPageTurnOverlay(pageTurnOverlayRef.current);
         };
     }, [pageWidth, pageHeight, sidePadding, topPadding, fontSize, lineHeight, fontFamily, noOfPages, content, title, setIsLoading, positionHighlightNoteMarkers]);
 
@@ -1104,6 +1286,11 @@ const Book = forwardRef<BookHandle, PageProps>(({
     return (
         <>
             <BookContent content={content} contentLanguage={contentLanguage} bookRef={bookRef} />
+            <div
+                ref={pageTurnOverlayRef}
+                className="page-turn-overlay"
+                aria-hidden="true"
+            />
             {highlightMenuPosition && !isOptionMenuVisible && !showTutorial && !isHighlightNoteModalVisible && (
                 <div
                     ref={highlightMenuRef}
