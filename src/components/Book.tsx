@@ -185,7 +185,31 @@ const resetPageTurnEffect = (scrollContainer: HTMLElement) => {
 const clearPageTurnOverlay = (overlayElement: HTMLElement | null) => {
     if (!overlayElement) return;
     overlayElement.classList.remove("page-turn-overlay--active");
+    overlayElement.classList.remove("page-turn-overlay--primed");
     overlayElement.replaceChildren();
+};
+
+const requestIdleTask = (callback: () => void): number => {
+    if (typeof window === "undefined") return 0;
+    const idleWindow = window as Window & {
+        requestIdleCallback?: (cb: () => void, options?: { timeout: number }) => number;
+    };
+    if (typeof idleWindow.requestIdleCallback === "function") {
+        return idleWindow.requestIdleCallback(callback, { timeout: 1500 });
+    }
+    return window.setTimeout(callback, 120);
+};
+
+const cancelIdleTask = (handle: number) => {
+    if (typeof window === "undefined") return;
+    const idleWindow = window as Window & {
+        cancelIdleCallback?: (handle: number) => void;
+    };
+    if (typeof idleWindow.cancelIdleCallback === "function") {
+        idleWindow.cancelIdleCallback(handle);
+        return;
+    }
+    window.clearTimeout(handle);
 };
 
 const removeDuplicateIds = (element: HTMLElement) => {
@@ -213,9 +237,48 @@ const createPageTurnFace = ({
     clone.style.pointerEvents = "none";
     clone.style.userSelect = "none";
     clone.style.webkitUserSelect = "none";
+    clone.setAttribute("aria-hidden", "true");
 
     face.appendChild(clone);
     return { face, clone };
+};
+
+type PageTurnFaces = {
+    cube: HTMLDivElement;
+    outgoingFace: HTMLDivElement;
+    incomingFace: HTMLDivElement;
+    outgoingClone: HTMLDivElement;
+    incomingClone: HTMLDivElement;
+    depth: number;
+    height: number;
+};
+
+const buildPageTurnFaces = (source: HTMLDivElement, depth: number): PageTurnFaces => {
+    const cube = document.createElement("div");
+    cube.className = "page-turn-cube";
+
+    const { face: outgoingFace, clone: outgoingClone } = createPageTurnFace({
+        source,
+        className: "page-turn-face--outgoing"
+    });
+    const { face: incomingFace, clone: incomingClone } = createPageTurnFace({
+        source,
+        className: "page-turn-face--incoming"
+    });
+
+    outgoingFace.style.transform = `rotateY(0deg) translateZ(${depth}px)`;
+    cube.style.transform = `translateZ(${-depth}px) rotateY(0deg)`;
+    cube.append(outgoingFace, incomingFace);
+
+    return {
+        cube,
+        outgoingFace,
+        incomingFace,
+        outgoingClone,
+        incomingClone,
+        depth,
+        height: source.clientHeight
+    };
 };
 
 // 3. Use forwardRef
@@ -271,6 +334,70 @@ const Book = forwardRef<BookHandle, PageProps>(({
 
     const percentReadRef = useRef(percentRead);
     const animationRef = useRef<number | null>(null);
+    const primedFacesRef = useRef<PageTurnFaces | null>(null);
+    const primeIdleHandleRef = useRef<number | null>(null);
+    const primeQueuedRef = useRef(false);
+    const layoutReadyRef = useRef(false);
+
+    const clearPrimedPageTurnFaces = useCallback(() => {
+        primedFacesRef.current = null;
+        clearPageTurnOverlay(pageTurnOverlayRef.current);
+    }, []);
+
+    // Deep-cloning the whole book and laying out two full copies of it is the
+    // expensive part of the cube turn, and it scales with book length. Do it
+    // once while idle and reuse the faces for every page turn, so a turn only
+    // has to set scrollLeft on already-rendered clones and animate a
+    // composited transform.
+    const primePageTurnFaces = useCallback(() => {
+        primeIdleHandleRef.current = null;
+
+        if (pageTurnAnimation !== "three-d" || prefersReducedMotion()) return;
+        if (!layoutReadyRef.current || pageWidth <= 0) return;
+
+        if (animationRef.current) {
+            // Never clobber an in-flight page turn; rebuild once it finishes.
+            primeQueuedRef.current = true;
+            return;
+        }
+        primeQueuedRef.current = false;
+
+        const scrollContainer = bookRef.current;
+        const overlayElement = pageTurnOverlayRef.current;
+        const containerRect = containerElementRef.current?.getBoundingClientRect()
+            ?? scrollContainer?.getBoundingClientRect();
+        if (!scrollContainer || !overlayElement || !containerRect) return;
+        if (containerRect.width <= 0 || containerRect.height <= 0) return;
+
+        const faces = buildPageTurnFaces(scrollContainer, containerRect.width / 2);
+
+        // Pre-scroll the faces to the most likely next turn so the first
+        // animated frame usually has nothing new to paint.
+        const spreadWidth = pageWidth * noOfPages;
+        faces.outgoingClone.scrollLeft = scrollContainer.scrollLeft;
+        faces.incomingClone.scrollLeft = spreadWidth > 0
+            ? scrollContainer.scrollLeft + spreadWidth
+            : scrollContainer.scrollLeft;
+
+        overlayElement.replaceChildren(faces.cube);
+        overlayElement.classList.add("page-turn-overlay--primed");
+
+        // Force the clones' layout to happen now, while idle, instead of on
+        // the critical path of the next page turn.
+        void faces.outgoingClone.scrollWidth;
+        void faces.incomingClone.scrollWidth;
+
+        primedFacesRef.current = faces;
+    }, [containerElementRef, noOfPages, pageTurnAnimation, pageWidth]);
+
+    const schedulePageTurnPrime = useCallback(() => {
+        if (primeIdleHandleRef.current !== null) {
+            cancelIdleTask(primeIdleHandleRef.current);
+            primeIdleHandleRef.current = null;
+        }
+        if (pageTurnAnimation !== "three-d") return;
+        primeIdleHandleRef.current = requestIdleTask(primePageTurnFaces);
+    }, [pageTurnAnimation, primePageTurnFaces]);
 
     useEffect(() => {
         const scrollContainer = bookRef.current;
@@ -281,8 +408,9 @@ const Book = forwardRef<BookHandle, PageProps>(({
         if (scrollContainer) {
             resetPageTurnEffect(scrollContainer);
         }
-        clearPageTurnOverlay(pageTurnOverlayRef.current);
-    }, [pageTurnAnimation]);
+        clearPrimedPageTurnFaces();
+        schedulePageTurnPrime();
+    }, [pageTurnAnimation, clearPrimedPageTurnFaces, schedulePageTurnPrime]);
 
     useEffect(() => {
         if (onPageCountChange) onPageCountChange(pageCount);
@@ -358,7 +486,15 @@ const Book = forwardRef<BookHandle, PageProps>(({
             animationRef.current = null;
         }
         resetPageTurnEffect(scrollContainer);
-        clearPageTurnOverlay(pageTurnOverlayRef.current);
+        const pageTurnOverlay = pageTurnOverlayRef.current;
+        if (pageTurnOverlay) {
+            // A previous turn may have been interrupted: hide the overlay but
+            // keep the primed faces so they can be reused below.
+            pageTurnOverlay.classList.remove("page-turn-overlay--active");
+            if (primedFacesRef.current) {
+                pageTurnOverlay.classList.add("page-turn-overlay--primed");
+            }
+        }
 
         const start = scrollContainer.scrollLeft;
         const target = targetPage * pageWidth * noOfPages;
@@ -383,7 +519,7 @@ const Book = forwardRef<BookHandle, PageProps>(({
         };
 
         if (pageTurnAnimation === "three-d") {
-            const overlayElement = pageTurnOverlayRef.current;
+            const overlayElement = pageTurnOverlay;
             const containerRect = containerElementRef.current?.getBoundingClientRect() ?? scrollContainer.getBoundingClientRect();
 
             if (!overlayElement || containerRect.width <= 0 || containerRect.height <= 0) {
@@ -396,24 +532,27 @@ const Book = forwardRef<BookHandle, PageProps>(({
             const depth = containerRect.width / 2;
             const startTime = performance.now();
 
-            const cube = document.createElement("div");
-            cube.className = "page-turn-cube";
+            // Reuse the faces primed while idle; fall back to a synchronous
+            // build (e.g. the first turn right after load) when unavailable
+            // or stale after a resize.
+            let faces = primedFacesRef.current;
+            if (
+                !faces ||
+                Math.abs(faces.depth - depth) > 0.5 ||
+                Math.abs(faces.height - scrollContainer.clientHeight) > 0.5
+            ) {
+                faces = buildPageTurnFaces(scrollContainer, depth);
+                overlayElement.replaceChildren(faces.cube);
+                primedFacesRef.current = faces;
+            }
 
-            const { face: outgoingFace, clone: outgoingClone } = createPageTurnFace({
-                source: scrollContainer,
-                className: "page-turn-face--outgoing"
-            });
-            const { face: incomingFace, clone: incomingClone } = createPageTurnFace({
-                source: scrollContainer,
-                className: "page-turn-face--incoming"
-            });
+            const { cube, outgoingFace, incomingFace, outgoingClone, incomingClone } = faces;
 
             outgoingFace.style.transform = `rotateY(0deg) translateZ(${depth}px)`;
             incomingFace.style.transform = `rotateY(${direction * 90}deg) translateZ(${depth}px)`;
             cube.style.transform = `translateZ(${-depth}px) rotateY(0deg)`;
-            cube.append(outgoingFace, incomingFace);
 
-            overlayElement.replaceChildren(cube);
+            overlayElement.classList.remove("page-turn-overlay--primed");
             overlayElement.classList.add("page-turn-overlay--active");
             scrollContainer.classList.add("book-page--turning-3d");
             scrollContainer.style.opacity = "0";
@@ -438,8 +577,20 @@ const Book = forwardRef<BookHandle, PageProps>(({
 
                 scrollContainer.scrollLeft = target;
                 resetPageTurnEffect(scrollContainer);
-                clearPageTurnOverlay(overlayElement);
                 animationRef.current = null;
+
+                // Keep the faces for the next turn instead of deep-cloning
+                // the whole book again on every page change.
+                overlayElement.classList.remove("page-turn-overlay--active");
+                if (primedFacesRef.current) {
+                    overlayElement.classList.add("page-turn-overlay--primed");
+                } else {
+                    clearPageTurnOverlay(overlayElement);
+                }
+
+                if (primeQueuedRef.current) {
+                    schedulePageTurnPrime();
+                }
             };
 
             animationRef.current = requestAnimationFrame(animateCubeTurn);
@@ -464,7 +615,7 @@ const Book = forwardRef<BookHandle, PageProps>(({
             }
         };
         animationRef.current = requestAnimationFrame(animateScroll);
-    }, [containerElementRef, pageTurnAnimation, pageWidth, noOfPages]);
+    }, [containerElementRef, pageTurnAnimation, pageWidth, noOfPages, schedulePageTurnPrime]);
 
     const goToPage = useCallback((targetPage: number) => {
         let safePage = targetPage;
@@ -955,7 +1106,8 @@ const Book = forwardRef<BookHandle, PageProps>(({
 
     useEffect(() => {
         renderHighlights();
-    }, [renderHighlights, content]);
+        schedulePageTurnPrime();
+    }, [renderHighlights, content, schedulePageTurnPrime]);
 
     useEffect(() => {
         const container = bookRef.current;
@@ -1239,18 +1391,28 @@ const Book = forwardRef<BookHandle, PageProps>(({
                     initialLoadDoneRef.current = true;
                     document.getElementById("root")?.dispatchEvent(new CustomEvent("react-ready"));
                 }
+                // The book is fully laid out now; warm the cube faces while
+                // idle so the next page turn doesn't clone/lay out the whole
+                // book on the critical path.
+                layoutReadyRef.current = true;
+                schedulePageTurnPrime();
             });
         }, 400);
         return () => {
             clearTimeout(timer);
+            layoutReadyRef.current = false;
             if (animationRef.current) {
                 cancelAnimationFrame(animationRef.current);
                 animationRef.current = null;
             }
             resetPageTurnEffect(currentBookRef);
-            clearPageTurnOverlay(pageTurnOverlayRef.current);
+            if (primeIdleHandleRef.current !== null) {
+                cancelIdleTask(primeIdleHandleRef.current);
+                primeIdleHandleRef.current = null;
+            }
+            clearPrimedPageTurnFaces();
         };
-    }, [pageWidth, pageHeight, sidePadding, topPadding, fontSize, lineHeight, fontFamily, noOfPages, content, title, setIsLoading, positionHighlightNoteMarkers]);
+    }, [pageWidth, pageHeight, sidePadding, topPadding, fontSize, lineHeight, fontFamily, noOfPages, content, title, setIsLoading, positionHighlightNoteMarkers, schedulePageTurnPrime, clearPrimedPageTurnFaces]);
 
 
     useEffect(() => {

@@ -163,8 +163,14 @@
         contain: layout paint size;
     }
 
+    .page-turn-overlay--primed {
+        display: block;
+        visibility: hidden;
+    }
+
     .page-turn-overlay--active {
         display: block;
+        visibility: visible;
     }
 
     .page-turn-cube {
