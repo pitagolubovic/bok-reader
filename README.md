@@ -42,9 +42,13 @@ export default MyBookViewer;
 -   `onTitleChange?`: `(title: string) => void` - Callback when the book title is loaded.
 -   `onLoadingChange?`: `(isLoading: boolean) => void` - Callback when the loading state changes.
 -   `onError?`: `(errorMsg: string) => void` - Callback when an error occurs during loading or processing.
--   `onSyncEvent?`: `(event: BokReaderSyncEvent) => void` - Emits semantic local mutations for sync queues (`progress.set`, `highlight.add`, `highlight.remove`, `highlight.updateColor`).
+-   `onSyncEvent?`: `(event: BokReaderSyncEvent) => void` - Emits semantic local mutations for sync queues (`progress.set`, `highlight.add`, `highlight.remove`, `highlight.updateColor`, `highlight.updateNote`). `progress.set` is only emitted for real page turns, not when the stored position is restored, the book is re-laid out, or a `syncState` is applied.
 -   `syncState?`: `BokReaderSyncState | null` - Host-provided remote/hydrated state for the current `bookId`.
--   `onConflictDetected?`: `(conflict: BokReaderSyncConflict) => void` - Called when incoming `syncState` conflicts with non-empty local data and `forceApply` is not set.
+-   `onConflictDetected?`: `(conflict: BokReaderSyncConflict) => void` - Called when incoming `syncState` conflicts with non-empty local data and `forceApply` is not set. Progress only conflicts when the two positions are more than a page apart.
+-   `onSyncStateApplied?`: `(syncState: BokReaderSyncState) => void` - Called after an incoming `syncState` (or `applySyncState`) has been applied. Together with `onConflictDetected`, every `syncState` ends in exactly one of the two.
+-   `onSyncReady?`: `(snapshot: BokReaderSyncSnapshot) => void` - Called once per book, after it is laid out and its locally stored progress/highlights are restored. Use it to pull remote state for `snapshot.bookId`.
+-   `theme?`: `string` - Controlled theme name. When set, it overrides (and is persisted to) the locally stored theme; use it to apply a synced theme. Leave `undefined` to let the reader manage the theme itself.
+-   `onThemeChange?`: `(theme: string) => void` - Called when the user picks a theme in the options menu. When `theme` is controlled, update it from here.
 -   `supportedFonts?`: `{ displayName: string; name: string }[]` - Array of custom fonts to make available in the options menu.
 -   `defaultFontFamily?`: `string` - Default reader font family used only when `bok_global_font_family` is not already set in localStorage (falls back to `"Courier New"`).
 -   `color?`: `string` - Hexadecimal value. Color tint of the component.
@@ -58,6 +62,7 @@ export default MyBookViewer;
 -   `applySyncState(syncState: BokReaderSyncState, options?: { forceApply?: boolean }): boolean` (`true` means accepted: applied now or queued until reader is ready)
 -   `getPendingSyncEvents(): BokReaderSyncEvent[]`
 -   `acknowledgeSyncEvents(mutationIds: string | string[]): void`
+-   `getTheme(): string` - Name of the theme currently shown (useful for seeding a remote copy).
 
 ## Development Scripts
 

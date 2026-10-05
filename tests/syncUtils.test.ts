@@ -4,9 +4,11 @@ import {
     areHighlightsEqual,
     clampProgress,
     enqueuePendingSyncEvent,
+    getProgressTolerance,
     getSyncStateFingerprint,
     hasProgressConflict,
-    listPendingSyncEvents
+    listPendingSyncEvents,
+    PROGRESS_EPSILON
 } from "../src/components/BokReader/syncUtils";
 
 const h1 = {
@@ -110,6 +112,27 @@ describe("hasProgressConflict", () => {
 
     test("does not flag when remote progress is missing", () => {
         expect(hasProgressConflict(0.7, undefined)).toBe(false);
+    });
+
+    test("does not flag positions on the same page", () => {
+        const tolerance = getProgressTolerance(200);
+        // 0.4537 snaps to page 91 of 200 (0.455) after being applied.
+        expect(hasProgressConflict(0.455, 0.4537, tolerance)).toBe(false);
+        expect(hasProgressConflict(0.46, 0.4537, tolerance)).toBe(true);
+    });
+});
+
+describe("getProgressTolerance", () => {
+    test("falls back to epsilon without a page count", () => {
+        expect(getProgressTolerance(0)).toBe(PROGRESS_EPSILON);
+        expect(getProgressTolerance(Number.NaN)).toBe(PROGRESS_EPSILON);
+    });
+
+    test("separates snapping (<= half a page) from page turns (one page)", () => {
+        const pageCount = 120;
+        const tolerance = getProgressTolerance(pageCount);
+        expect(0.5 / pageCount).toBeLessThan(tolerance);
+        expect(1 / pageCount).toBeGreaterThan(tolerance);
     });
 });
 

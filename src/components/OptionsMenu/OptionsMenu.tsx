@@ -24,7 +24,7 @@ interface OptionsMenuProps {
     setTopPadding: React.Dispatch<React.SetStateAction<number>>;
     setPadding: React.Dispatch<React.SetStateAction<number>>;
     setFontFamily: React.Dispatch<React.SetStateAction<string>>;
-    setTheme: React.Dispatch<React.SetStateAction<string>>;
+    setTheme: (theme: string) => void;
     setPageTurnAnimation: (animation: PageTurnAnimation) => void;
     supportedFonts: { displayName: string; name: string }[];
     allThemes: { [key: string]: Theme }

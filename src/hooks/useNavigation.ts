@@ -102,6 +102,11 @@ const useNavigation = (
         const handleTouchEnd = (event: TouchEvent) => {
             // FIX: Ignore if we tapped a link
             const target = event.target as HTMLElement;
+            // Taps on host UI rendered outside the reader (banners, buttons)
+            // are not page turns, and preventing their default would swallow
+            // the click.
+            const container = containerElementRef.current;
+            if (!container || !container.contains(target)) return;
             if (
                 target.closest("a") ||
                 target.closest("[data-highlight-id]") ||
@@ -156,7 +161,7 @@ const useNavigation = (
             window.removeEventListener("touchstart", handleTouchStart);
             window.removeEventListener("touchend", handleTouchEnd);
         };
-    }, [pageWidth, handlePageClick]);
+    }, [pageWidth, handlePageClick, containerElementRef]);
 
     // --- MOUSE EVENTS ---
     useEffect(() => {

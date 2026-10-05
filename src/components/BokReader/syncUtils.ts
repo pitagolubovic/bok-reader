@@ -89,7 +89,19 @@ export function getSyncStateFingerprint(syncState: SyncStateFingerprintInput): s
     return `${syncState.bookId}|${revision}|${progress}|${highlightsSignature}|${forceApply}`;
 }
 
-export function hasProgressConflict(localProgress: number, remoteProgress: number | undefined): boolean {
+// The reader always snaps to a page boundary, so any progress value lands up to
+// half a page away from where it was requested. Treat anything closer than
+// three quarters of a page as the same reading position.
+export function getProgressTolerance(pageCount: number): number {
+    if (!Number.isFinite(pageCount) || pageCount <= 0) return PROGRESS_EPSILON;
+    return Math.max(PROGRESS_EPSILON, 0.75 / pageCount);
+}
+
+export function hasProgressConflict(
+    localProgress: number,
+    remoteProgress: number | undefined,
+    tolerance: number = PROGRESS_EPSILON
+): boolean {
     if (typeof remoteProgress !== "number") return false;
 
     const normalizedLocal = clampProgress(localProgress);
@@ -97,7 +109,7 @@ export function hasProgressConflict(localProgress: number, remoteProgress: numbe
 
     if (normalizedLocal <= PROGRESS_EPSILON) return false;
 
-    return Math.abs(normalizedLocal - normalizedRemote) > PROGRESS_EPSILON;
+    return Math.abs(normalizedLocal - normalizedRemote) > Math.max(PROGRESS_EPSILON, tolerance);
 }
 
 export function enqueuePendingSyncEvent<TEvent extends PendingSyncEvent>(

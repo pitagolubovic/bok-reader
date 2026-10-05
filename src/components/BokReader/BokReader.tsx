@@ -19,11 +19,11 @@ import HighlightNoteModal from "../HighlightNoteModal/HighlightNoteModal";
 import TutorialOverlay from "../TutorialOverlay/TutorialOverlay";
 import {
     acknowledgePendingSyncEvents,
-    PROGRESS_EPSILON,
     areHighlightsEqual,
     clampProgress,
     cloneHighlights,
     enqueuePendingSyncEvent,
+    getProgressTolerance,
     getSyncStateFingerprint,
     hasProgressConflict,
     listPendingSyncEvents
@@ -100,6 +100,8 @@ export interface BokReaderHandle {
     applySyncState: (syncState: BokReaderSyncState, options?: { forceApply?: boolean }) => boolean;
     getPendingSyncEvents: () => BokReaderSyncEvent[];
     acknowledgeSyncEvents: (mutationIds: string | string[]) => void;
+    // Name of the theme currently shown (after falling back to a built-in one).
+    getTheme: () => string;
 }
 
 interface BokReaderProps {
@@ -110,6 +112,10 @@ interface BokReaderProps {
     onSyncEvent?: (event: BokReaderSyncEvent) => void;
     syncState?: BokReaderSyncState | null;
     onConflictDetected?: (conflict: BokReaderSyncConflict) => void;
+    onSyncReady?: (snapshot: BokReaderSyncSnapshot) => void;
+    onSyncStateApplied?: (syncState: BokReaderSyncState) => void;
+    theme?: string;
+    onThemeChange?: (theme: string) => void;
     className?: string;
     style?: React.CSSProperties;
     supportedFonts?: { displayName: string; name: string }[];
@@ -152,6 +158,10 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
     onSyncEvent,
     syncState,
     onConflictDetected,
+    onSyncReady,
+    onSyncStateApplied,
+    theme: controlledTheme,
+    onThemeChange,
     className,
     style,
     supportedFonts = [],
@@ -172,7 +182,8 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
     const [fontSize, setFontSize] = usePersistentState<number>("bok_global_fontsize", 1.4);
     const [lineHeight, setLineHeight] = usePersistentState<number>("bok_global_line_height", 1.5);
     const [fontFamily, setFontFamily] = usePersistentState<string>("bok_global_font_family", defaultFontFamily);
-    const [theme, setTheme] = usePersistentState<string>("bok_global_theme", "Amoled Dark");
+    const [storedTheme, setStoredTheme] = usePersistentState<string>("bok_global_theme", "Amoled Dark");
+    const theme = controlledTheme ?? storedTheme;
     const [storedPageTurnAnimation, setStoredPageTurnAnimation] = usePersistentState<string>(
         "bok_global_page_turn_animation",
         DEFAULT_PAGE_TURN_ANIMATION
@@ -188,6 +199,7 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
 
     const [currentBookPage, setCurrentBookPage] = useState(0);
     const [totalBookPages, setTotalBookPages] = useState(0);
+    const totalBookPagesRef = useRef(0);
 
     const [tutorialShown, setTutorialShown] = usePersistentState<boolean>("bok_tutorial_shown", false);
     const [showTutorial, setShowTutorial] = useState(!tutorialShown);
@@ -200,6 +212,7 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
     const queuedSyncStateRef = useRef<BokReaderSyncState | null>(null);
     const processedSyncStatesRef = useRef<Set<string>>(new Set());
     const lastConflictFingerprintRef = useRef("");
+    const syncReadyBookIdRef = useRef("");
     const bottomMenuLockUntilRef = useRef(0);
 
     const effectiveTheme = (allThemes as { [key: string]: Theme })[theme] ? theme : "Amoled Dark";
@@ -301,8 +314,12 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
             }
         });
 
+        if (onSyncStateApplied) {
+            onSyncStateApplied(nextSyncState);
+        }
+
         return "applied";
-    }, [bookId, withSyncEmissionSuppressed]);
+    }, [bookId, onSyncStateApplied, withSyncEmissionSuppressed]);
 
     const processExternalSyncState = useCallback((nextSyncState: BokReaderSyncState) => {
         if (!bookId || nextSyncState.bookId !== bookId || isLoading) return;
@@ -322,7 +339,8 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
 
         const conflictEntities: BokReaderSyncConflictEntity[] = [];
 
-        if (hasProgressConflict(localSnapshot.progress, nextSyncState.progress)) {
+        const progressTolerance = getProgressTolerance(totalBookPagesRef.current);
+        if (hasProgressConflict(localSnapshot.progress, nextSyncState.progress, progressTolerance)) {
             conflictEntities.push("progress");
         }
 
@@ -378,8 +396,9 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
         },
         acknowledgeSyncEvents: (mutationIds: string | string[]) => {
             acknowledgePendingSyncEvents(pendingSyncEventsRef.current, mutationIds);
-        }
-    }), [applySyncStateToReader, getSyncSnapshot]);
+        },
+        getTheme: () => effectiveTheme
+    }), [applySyncStateToReader, effectiveTheme, getSyncSnapshot]);
 
     useEffect(() => {
         if (!highlightsStorageKey) return;
@@ -450,8 +469,25 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
         lastProgressSyncEventRef.current = null;
         hasObservedProgressRef.current = false;
         progressRef.current = 0;
+        syncReadyBookIdRef.current = "";
         setNoteEditorHighlightId(null);
     }, [bookId]);
+
+    // isLoading only turns false once the book is laid out and the locally
+    // stored position has been restored, so this is the earliest point at
+    // which a host can compare local state against its remote copy.
+    useEffect(() => {
+        if (!bookId || isLoading || !bookComponentRef.current) return;
+        if (syncReadyBookIdRef.current === bookId) return;
+
+        const snapshot = getSyncSnapshot();
+        if (!snapshot) return;
+
+        syncReadyBookIdRef.current = bookId;
+        if (onSyncReady) {
+            onSyncReady(snapshot);
+        }
+    }, [bookId, getSyncSnapshot, isLoading, onSyncReady]);
 
     const handleAddHighlight = useCallback((highlight: Highlight) => {
         setHighlights((prev) => [...prev, highlight]);
@@ -566,17 +602,23 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
         const normalizedProgress = clampProgress(progress);
         progressRef.current = normalizedProgress;
 
-        if (!hasObservedProgressRef.current) {
+        // Anything observed while loading or re-laying out is the stored
+        // position being restored, not the reader moving, so it only becomes
+        // the baseline for the next event.
+        if (!hasObservedProgressRef.current || isLoading) {
             hasObservedProgressRef.current = true;
             lastProgressSyncEventRef.current = normalizedProgress;
             return;
         }
 
-        if (isLoading || !bookId || suppressSyncEmissionRef.current > 0) return;
+        if (!bookId || suppressSyncEmissionRef.current > 0) return;
 
+        // Snapping to a page after a relayout or an applied sync state moves
+        // progress by less than a page; only real page turns are events.
         if (
             lastProgressSyncEventRef.current !== null &&
-            Math.abs(lastProgressSyncEventRef.current - normalizedProgress) <= PROGRESS_EPSILON
+            Math.abs(lastProgressSyncEventRef.current - normalizedProgress) <
+                getProgressTolerance(totalBookPagesRef.current)
         ) {
             return;
         }
@@ -590,6 +632,25 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
             progress: normalizedProgress
         });
     }, [bookId, emitSyncEvent, isLoading]);
+
+    const handlePageCountChange = useCallback((pageCount: number) => {
+        totalBookPagesRef.current = pageCount;
+        setTotalBookPages(pageCount);
+    }, []);
+
+    useEffect(() => {
+        if (controlledTheme === undefined) return;
+        setStoredTheme(controlledTheme);
+    }, [controlledTheme, setStoredTheme]);
+
+    const handleThemeChange = useCallback((nextTheme: string) => {
+        if (controlledTheme === undefined) {
+            setStoredTheme(nextTheme);
+        }
+        if (onThemeChange) {
+            onThemeChange(nextTheme);
+        }
+    }, [controlledTheme, onThemeChange, setStoredTheme]);
 
     useEffect(() => {
         if (tutorialShown) setShowTutorial(false);
@@ -704,7 +765,7 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
                         containerElementRef={bokReaderWrapperRef}
                         showTutorial={showTutorial}
                         onPageChange={setCurrentBookPage}
-                        onPageCountChange={setTotalBookPages}
+                        onPageCountChange={handlePageCountChange}
                         onProgressChange={handleProgressChange}
                         highlights={highlights}
                         onAddHighlight={handleAddHighlight}
@@ -729,7 +790,7 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
                             setFontSize={setFontSize}
                             setLineHeight={setLineHeight}
                             setFontFamily={setFontFamily}
-                            setTheme={setTheme}
+                            setTheme={handleThemeChange}
                             setPageTurnAnimation={setStoredPageTurnAnimation}
                             allThemes={allThemes}
                             supportedFonts={supportedFonts}

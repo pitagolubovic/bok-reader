@@ -38,7 +38,14 @@ Suggested reader integration surface:
 - `onSyncEvent(event)` for semantic patch events.
 - `syncState` prop for host-provided hydrated state.
 - `onConflictDetected(conflict)` callback for manual resolution workflow.
+- `onSyncStateApplied(syncState)`: every incoming `syncState` ends in either this or `onConflictDetected`.
+- `onSyncReady(snapshot)`: fired once per book after layout and local restore; hosts pull remote state here.
+- `theme` / `onThemeChange`: controlled color scheme so hosts can sync it (preferences are global, not per book).
 - Ref methods for snapshot/apply/ack operations as sync evolves.
+
+Progress event semantics:
+- `progress.set` is emitted only for real page turns. Restoring the stored position, relayouts and applied sync states snap by less than a page and are not events.
+- Progress conflicts use a page-based tolerance (`getProgressTolerance`), so positions on the same page never conflict.
 
 Suggested backend contract (custom API + DB):
 - `POST /v1/sync/events` with idempotent mutation IDs.

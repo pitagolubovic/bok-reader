@@ -41,6 +41,14 @@ function App() {
         console.warn("[BokExample] onConflictDetected:", conflict);
     }, []);
 
+    const handleSyncReady = useCallback((snapshot: BokReaderSyncSnapshot) => {
+        console.log("[BokExample] onSyncReady:", snapshot);
+    }, []);
+
+    const handleSyncStateApplied = useCallback((state: BokReaderSyncState) => {
+        console.log("[BokExample] onSyncStateApplied:", state);
+    }, []);
+
     const logSnapshot = useCallback(() => {
         const snapshot = readerRef.current?.getSyncSnapshot() ?? null;
         console.log("[BokExample] getSyncSnapshot:", snapshot);
@@ -159,6 +167,8 @@ function App() {
                     onSyncEvent={handleSyncEvent}
                     syncState={syncState}
                     onConflictDetected={handleConflictDetected}
+                    onSyncReady={handleSyncReady}
+                    onSyncStateApplied={handleSyncStateApplied}
                     supportedFonts={supportedFonts}
                     themes={themes}
                 />
