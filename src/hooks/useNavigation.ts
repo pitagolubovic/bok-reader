@@ -102,6 +102,9 @@ const useNavigation = (
         const handleTouchEnd = (event: TouchEvent) => {
             // FIX: Ignore if we tapped a link
             const target = event.target as HTMLElement;
+            // Taps on host UI layered over the reader (toasts, dialogs) must not turn pages;
+            // preventDefault below would also swallow their click.
+            if (!target.closest(".bok-reader-container")) return;
             if (
                 target.closest("a") ||
                 target.closest("[data-highlight-id]") ||
