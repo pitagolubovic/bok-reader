@@ -68,6 +68,17 @@ export default MyBookViewer;
 -   `npm run lint`: Lint the project files.
 -   `npm run preview`: Preview the production build locally.
 
+## Releasing
+
+Pushing a version tag publishes to npm through GitHub Actions (`.github/workflows/publish.yml`), with no npm login:
+
+```bash
+npm version patch   # or minor / major; bumps package.json and creates the tag
+git push --follow-tags
+```
+
+The workflow checks the tag matches `package.json`, runs tests and lint, builds and publishes. It uses npm trusted publishing, which needs a one-time setup on npmjs.com: package settings -> Trusted Publisher -> GitHub Actions, repository `pitagolubovic/bok-reader`, workflow `publish.yml`.
+
 ## Dependencies
 
 -   jszip

@@ -1,0 +1,41 @@
+# Publishes to npm when a version tag is pushed, e.g.:
+#   npm version patch && git push --follow-tags
+#
+# Uses npm trusted publishing (OIDC), so no npm token or 2FA code is needed.
+# One-time setup on npmjs.com: bok-reader -> Settings -> Trusted Publisher -> GitHub Actions,
+# repository "pitagolubovic/bok-reader", workflow "publish.yml".
+name: Publish to npm
+
+on:
+    push:
+        tags: ["v*"]
+
+permissions:
+    contents: read
+    id-token: write # lets npm verify this workflow instead of a token
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Tag must match package.json version
+              run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+
+            - uses: oven-sh/setup-bun@v2
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  registry-url: https://registry.npmjs.org
+
+            # trusted publishing needs npm 11.5.1 or newer
+            - run: npm install -g npm@latest
+
+            - run: bun install --frozen-lockfile
+            - run: bun test
+            - run: npm run lint
+
+            # prepublishOnly builds dist/; provenance is attached automatically
+            - run: npm publish
