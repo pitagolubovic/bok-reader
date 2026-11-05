@@ -47,6 +47,8 @@ export default MyBookViewer;
 -   `onConflictDetected?`: `(conflict: BokReaderSyncConflict) => void` - Called when incoming `syncState` conflicts with non-empty local data and `forceApply` is not set.
 -   `supportedFonts?`: `{ displayName: string; name: string }[]` - Array of custom fonts to make available in the options menu.
 -   `defaultFontFamily?`: `string` - Default reader font family used only when `bok_global_font_family` is not already set in localStorage (falls back to `"Courier New"`).
+-   `themes?`: `{ [name: string]: Theme }` - Extra themes (`--bg-color`, `--text-color`, `--color-tint`) added to the built-in "Da Vinci" and "Amoled Dark".
+-   `loadingScreenTheme?`: `string | Theme` - Pins the loading screen to one theme, given by name (built-in or from `themes`) or as a `Theme` object. By default the loading screen follows the reader's current theme.
 -   `color?`: `string` - Hexadecimal value. Color tint of the component.
 -   `style?`: `React.CSSProperties` - Optional inline styles for the main wrapper component.
 

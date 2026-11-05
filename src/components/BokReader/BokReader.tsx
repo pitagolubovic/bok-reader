@@ -114,6 +114,8 @@ interface BokReaderProps {
     style?: React.CSSProperties;
     supportedFonts?: { displayName: string; name: string }[];
     themes?: { [key: string]: Theme };
+    // Pins the loading screen to one theme (a theme name or a Theme object); by default it follows the reader's theme
+    loadingScreenTheme?: string | Theme;
     defaultFontFamily?: string;
 }
 
@@ -156,6 +158,7 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
     style,
     supportedFonts = [],
     themes = EMPTY_THEMES,
+    loadingScreenTheme,
     defaultFontFamily = "Courier New",
 }, ref) => {
     const { title, bookId, language, rawContent, toc, isLoading, error, loadEpub, setIsLoading } =
@@ -203,6 +206,9 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
     const bottomMenuLockUntilRef = useRef(0);
 
     const effectiveTheme = (allThemes as { [key: string]: Theme })[theme] ? theme : "Amoled Dark";
+    const resolvedLoadingScreenTheme = typeof loadingScreenTheme === "string"
+        ? (allThemes as { [key: string]: Theme })[loadingScreenTheme]
+        : loadingScreenTheme;
     const pageTurnAnimation = isPageTurnAnimation(storedPageTurnAnimation)
         ? storedPageTurnAnimation
         : DEFAULT_PAGE_TURN_ANIMATION;
@@ -678,7 +684,7 @@ export const BokReader = forwardRef<BokReaderHandle, BokReaderProps>(({
             style={{ ...style, ...dynamicCssVariables } as React.CSSProperties}
             ref={bokReaderWrapperRef}
         >
-            <LoadingScreen isLoading={isLoading} />
+            <LoadingScreen isLoading={isLoading} theme={resolvedLoadingScreenTheme} />
 
             {rawContent && (
                 <>
