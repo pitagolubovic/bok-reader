@@ -106,14 +106,51 @@ const getMenuLeftPosition = ({
     return Math.max(minLeft, Math.min(maxLeft, anchorLeft));
 };
 
+type BookLayoutStyle = Record<`--${string}`, string> & { maxHeight: string };
+
+// Only the values that differ are written: an unchanged write can still make
+// the browser lay out the whole book again.
+const applyBookLayoutStyle = (element: HTMLElement, layoutStyle: BookLayoutStyle) => {
+    for (const [name, value] of Object.entries(layoutStyle)) {
+        if (name === "maxHeight") {
+            if (element.style.maxHeight !== value) element.style.maxHeight = value;
+        } else if (element.style.getPropertyValue(name) !== value) {
+            element.style.setProperty(name, value);
+        }
+    }
+};
+
+const BOOK_FONT_LOAD_TIMEOUT_MS = 3000;
+
+// Loads the faces the book's text will be set in. Laying the book out before
+// they arrive means laying it out again, for every element, once they do.
+const loadBookFonts = (bookElement: HTMLElement): Promise<void> => {
+    const fonts = typeof document !== "undefined" ? document.fonts : undefined;
+    if (!fonts?.load) return Promise.resolve();
+    // The resolved stack, with the reader's fallbacks after the chosen font
+    const family = getComputedStyle(bookElement).fontFamily;
+    if (!family) return Promise.resolve();
+    const faces = ["", "italic ", "bold ", "italic bold "].map((variant) => (
+        fonts.load(`${variant}16px ${family}`).catch(() => [])
+    ));
+    return Promise.race([
+        Promise.all(faces).then(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, BOOK_FONT_LOAD_TIMEOUT_MS))
+    ]);
+};
+
 const BookContent = memo(
     ({
         content,
         contentLanguage,
+        layoutStyle,
         bookRef
     }: {
         content: string;
         contentLanguage: string;
+        // Applied with the content, so the book's first layout already uses
+        // the reader's settings. Later changes are applied by Book itself.
+        layoutStyle: BookLayoutStyle;
         bookRef: React.RefObject<HTMLDivElement>;
     }) => (
         <div
@@ -122,6 +159,7 @@ const BookContent = memo(
             className="book-page"
             id="bok-main-element"
             lang={contentLanguage || undefined}
+            style={layoutStyle as React.CSSProperties}
         ></div>
     ),
     (prev, next) => prev.content === next.content && prev.contentLanguage === next.contentLanguage,
@@ -319,6 +357,33 @@ const Book = forwardRef<BookHandle, PageProps>(({
     const copyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const [pageWidth, pageHeight, noOfPages] = usePage(containerElementRef);
+    // The book's HTML goes in only once the page size is known. Measuring the
+    // container with the book already inside would lay the whole book out,
+    // and then again once the settings below are applied.
+    const hasPageSize = pageWidth > 0 && pageHeight > 0;
+    const [bookFontsLoaded, setBookFontsLoaded] = useState(false);
+    const renderedContent = hasPageSize && bookFontsLoaded ? content : "";
+    const layoutStyle: BookLayoutStyle = {
+        "--side-padding": `${sidePadding}px`,
+        "--top-padding": `${topPadding}px`,
+        "--font-size": `${fontSize}em`,
+        "--line-height": String(lineHeight),
+        "--font-family": fontFamily,
+        "--computed-width": `${pageWidth}px`,
+        maxHeight: `${pageHeight}px`
+    };
+
+    useLayoutEffect(() => {
+        const bookElement = bookRef.current;
+        if (bookFontsLoaded || !hasPageSize || !bookElement) return;
+        let cancelled = false;
+        void loadBookFonts(bookElement).then(() => {
+            if (!cancelled) setBookFontsLoaded(true);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [bookFontsLoaded, hasPageSize]);
     const [percentRead, setPercentRead] = usePercentageRead(bookRef);
     const [currentPage, setCurrentPage] = useState(1);
     // Mirrors currentPage so rapid page turns don't read a stale value
@@ -436,6 +501,12 @@ const Book = forwardRef<BookHandle, PageProps>(({
         clearPrimedPageTurnFaces();
         schedulePageTurnPrime();
     }, [pageTurnAnimation, cancelCubeTurn, clearPrimedPageTurnFaces, schedulePageTurnPrime]);
+
+    useEffect(() => {
+        // The copies of the book in the overlay stay rendered between turns;
+        // inert keeps them out of find-in-page and focus.
+        if (pageTurnOverlayRef.current) pageTurnOverlayRef.current.inert = true;
+    }, []);
 
     useEffect(() => {
         if (onPageCountChange) onPageCountChange(pageCount);
@@ -980,6 +1051,9 @@ const Book = forwardRef<BookHandle, PageProps>(({
         if (!container) return;
 
         const existingHighlights = container.querySelectorAll("span[data-highlight-id]");
+        // Only where a highlight was unwrapped are there split text nodes to
+        // merge back; normalizing every chapter walks the whole book.
+        const unwrappedParents = new Set<Node>();
         existingHighlights.forEach((span) => {
             const parent = span.parentNode;
             if (!parent) return;
@@ -987,10 +1061,9 @@ const Book = forwardRef<BookHandle, PageProps>(({
                 parent.insertBefore(span.firstChild, span);
             }
             parent.removeChild(span);
+            unwrappedParents.add(parent);
         });
-
-        const chapters = container.querySelectorAll(".bok-chapter");
-        chapters.forEach((chapter) => chapter.normalize());
+        unwrappedParents.forEach((parent) => parent.normalize());
 
         if (!highlights || highlights.length === 0) return;
 
@@ -1170,7 +1243,7 @@ const Book = forwardRef<BookHandle, PageProps>(({
     useEffect(() => {
         renderHighlights();
         schedulePageTurnPrime();
-    }, [renderHighlights, content, schedulePageTurnPrime]);
+    }, [renderHighlights, renderedContent, schedulePageTurnPrime]);
 
     useEffect(() => {
         const container = bookRef.current;
@@ -1420,49 +1493,68 @@ const Book = forwardRef<BookHandle, PageProps>(({
     // --- LAYOUT & RESIZE ---
     useEffect(() => {
         const currentBookRef = bookRef.current;
-        if (!currentBookRef || pageWidth <= 0 || pageHeight <= 0) return;
+        if (!currentBookRef || !renderedContent || pageWidth <= 0 || pageHeight <= 0) return;
         setIsLoading(true);
+        let cancelled = false;
+        let measureFrame = 0;
+        // The first layout happens behind the loading screen, so it can start
+        // right away. Later ones (settings changes, resizes) wait for the
+        // loading screen to fade in over the text before it reflows.
+        const layoutDelay = initialLoadDoneRef.current ? 400 : 0;
         const timer = setTimeout(() => {
-            currentBookRef.style.setProperty("--side-padding", `${sidePadding}px`);
-            currentBookRef.style.setProperty("--top-padding", `${topPadding}px`);
-            currentBookRef.style.setProperty("--font-size", `${fontSize}em`);
-            currentBookRef.style.setProperty("--line-height", String(lineHeight));
-            currentBookRef.style.setProperty("--font-family", fontFamily);
-            currentBookRef.style.setProperty("--computed-width", `${pageWidth}px`);
-            currentBookRef.style.maxHeight = `${pageHeight}px`;
-            void currentBookRef.offsetHeight; // Force reflow
-            requestAnimationFrame(() => {
-                if (!currentBookRef) return;
-                const totalWidth = currentBookRef.scrollWidth;
-                const newPageCount = pageWidth > 0 && totalWidth > 0
-                    ? Math.round(totalWidth / pageWidth)
-                    : 0;
-                const noOfWholePages = noOfPages === 1 ? newPageCount : Math.round(newPageCount / 2);
-                setPageCount(noOfWholePages);
-                if (noOfWholePages > 0 && currentBookRef.clientWidth > 0) {
-                    const currentPercent = percentReadRef.current;
-                    let targetPage = Math.round(noOfWholePages * currentPercent);
-                    targetPage = Math.max(0, Math.min(noOfWholePages - 1, targetPage));
-                    updateCurrentPage(targetPage);
-                    currentBookRef.scrollLeft = targetPage * pageWidth * noOfPages;
-                } else {
-                    updateCurrentPage(1);
-                }
-                positionHighlightNoteMarkers();
-                setIsLoading(false);
-                if (!initialLoadDoneRef.current) {
-                    initialLoadDoneRef.current = true;
-                    document.getElementById("root")?.dispatchEvent(new CustomEvent("react-ready"));
-                }
-                // The book is fully laid out now; warm the cube faces while
-                // idle so the next page turn doesn't clone/lay out the whole
-                // book on the critical path.
-                layoutReadyRef.current = true;
-                schedulePageTurnPrime();
+            applyBookLayoutStyle(currentBookRef, {
+                "--side-padding": `${sidePadding}px`,
+                "--top-padding": `${topPadding}px`,
+                "--font-size": `${fontSize}em`,
+                "--line-height": String(lineHeight),
+                "--font-family": fontFamily,
+                "--computed-width": `${pageWidth}px`,
+                maxHeight: `${pageHeight}px`
             });
-        }, 400);
+            // A new font is loaded before the reflow, so the book is laid out
+            // once in it rather than first in a fallback. fonts.ready then
+            // covers faces only the layout itself asks for (e.g. headings).
+            void loadBookFonts(currentBookRef).then(() => {
+                if (cancelled) return;
+                void currentBookRef.offsetHeight; // Force reflow
+                return document.fonts?.ready.catch(() => undefined);
+            }).then(() => {
+                if (cancelled) return;
+                measureFrame = requestAnimationFrame(() => {
+                    if (cancelled) return;
+                    const totalWidth = currentBookRef.scrollWidth;
+                    const newPageCount = pageWidth > 0 && totalWidth > 0
+                        ? Math.round(totalWidth / pageWidth)
+                        : 0;
+                    const noOfWholePages = noOfPages === 1 ? newPageCount : Math.round(newPageCount / 2);
+                    setPageCount(noOfWholePages);
+                    if (noOfWholePages > 0 && currentBookRef.clientWidth > 0) {
+                        const currentPercent = percentReadRef.current;
+                        let targetPage = Math.round(noOfWholePages * currentPercent);
+                        targetPage = Math.max(0, Math.min(noOfWholePages - 1, targetPage));
+                        updateCurrentPage(targetPage);
+                        currentBookRef.scrollLeft = targetPage * pageWidth * noOfPages;
+                    } else {
+                        updateCurrentPage(1);
+                    }
+                    positionHighlightNoteMarkers();
+                    setIsLoading(false);
+                    if (!initialLoadDoneRef.current) {
+                        initialLoadDoneRef.current = true;
+                        document.getElementById("root")?.dispatchEvent(new CustomEvent("react-ready"));
+                    }
+                    // The book is fully laid out now; warm the cube faces while
+                    // idle so the next page turn doesn't clone/lay out the whole
+                    // book on the critical path.
+                    layoutReadyRef.current = true;
+                    schedulePageTurnPrime();
+                });
+            });
+        }, layoutDelay);
         return () => {
+            cancelled = true;
             clearTimeout(timer);
+            cancelAnimationFrame(measureFrame);
             layoutReadyRef.current = false;
             if (animationRef.current) {
                 cancelAnimationFrame(animationRef.current);
@@ -1476,7 +1568,7 @@ const Book = forwardRef<BookHandle, PageProps>(({
             }
             clearPrimedPageTurnFaces();
         };
-    }, [pageWidth, pageHeight, sidePadding, topPadding, fontSize, lineHeight, fontFamily, noOfPages, content, title, setIsLoading, positionHighlightNoteMarkers, schedulePageTurnPrime, clearPrimedPageTurnFaces, cancelCubeTurn, updateCurrentPage]);
+    }, [pageWidth, pageHeight, sidePadding, topPadding, fontSize, lineHeight, fontFamily, noOfPages, renderedContent, title, setIsLoading, positionHighlightNoteMarkers, schedulePageTurnPrime, clearPrimedPageTurnFaces, cancelCubeTurn, updateCurrentPage]);
 
 
     useEffect(() => {
@@ -1511,7 +1603,12 @@ const Book = forwardRef<BookHandle, PageProps>(({
 
     return (
         <>
-            <BookContent content={content} contentLanguage={contentLanguage} bookRef={bookRef} />
+            <BookContent
+                content={renderedContent}
+                contentLanguage={contentLanguage}
+                layoutStyle={layoutStyle}
+                bookRef={bookRef}
+            />
             <div
                 ref={pageTurnOverlayRef}
                 className="page-turn-overlay"

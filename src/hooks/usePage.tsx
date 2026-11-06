@@ -1,5 +1,5 @@
 // src/hooks/usePage.tsx
-import { useState, useEffect, RefObject } from "react";
+import { useState, useLayoutEffect, RefObject } from "react";
 
 export default function usePage(containerRef: RefObject<Element | null>) {
   // Start with initial state
@@ -9,8 +9,9 @@ export default function usePage(containerRef: RefObject<Element | null>) {
     noOfPages: 1,
   });
 
-  useEffect(() => {
-    // All logic now happens inside useEffect, guaranteeing the initial render is complete.
+  // A layout effect, so the size is known before the first paint and the
+  // book can be laid out once, at its final size.
+  useLayoutEffect(() => {
     const containerElement = containerRef?.current; // Use optional chaining for safety
 
     const updatePageDimensions = () => {

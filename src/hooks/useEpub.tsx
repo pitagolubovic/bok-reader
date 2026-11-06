@@ -141,7 +141,7 @@ export default function useEpub() {
     const currentObfFolder = useRef("");
     const currentStyle = useRef("");
     const currentZip = useRef<JSZip | null>(null);
-    const styleLinkElement = useRef<HTMLLinkElement | null>(null);
+    const bookStyleElement = useRef<HTMLStyleElement | null>(null);
     const currentImages = useRef<BlobImages>({});
     const parseManifestAndSpineRef = useRef<(opf: Document) => Promise<void>>(async () => { });
 
@@ -158,10 +158,9 @@ export default function useEpub() {
             currentStyle.current = "";
             currentImages.current = {};
 
-            if (styleLinkElement.current) {
-                document.head.removeChild(styleLinkElement.current);
-                URL.revokeObjectURL(styleLinkElement.current.href);
-                styleLinkElement.current = null;
+            if (bookStyleElement.current) {
+                bookStyleElement.current.remove();
+                bookStyleElement.current = null;
             }
 
             try {
@@ -592,13 +591,13 @@ export default function useEpub() {
 
     function addStyling() {
         if (!currentStyle.current.trim()) return;
-        const styleBlob = new Blob([currentStyle.current], { type: "text/css" });
-        const blobURL = URL.createObjectURL(styleBlob);
-        styleLinkElement.current = document.createElement("link");
-        styleLinkElement.current.href = blobURL;
-        styleLinkElement.current.rel = "stylesheet";
-        styleLinkElement.current.setAttribute("data-bok-reader-style", "true");
-        document.head.appendChild(styleLinkElement.current);
+        // A <style> element applies immediately. A <link> to a blob URL loads
+        // asynchronously, and arriving after the book's first layout made the
+        // browser lay the whole book out a second time.
+        bookStyleElement.current = document.createElement("style");
+        bookStyleElement.current.textContent = currentStyle.current;
+        bookStyleElement.current.setAttribute("data-bok-reader-style", "true");
+        document.head.appendChild(bookStyleElement.current);
     }
 
     return { title, bookId, language, rawContent, toc, isLoading, error, loadEpub, setIsLoading };

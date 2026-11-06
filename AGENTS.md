@@ -50,3 +50,18 @@ Host responsibilities:
 - Queue and submit emitted events.
 - Pull remote state on app open/book open/focus/manual sync.
 - Present conflict modal and apply chosen resolution.
+
+
+## Performance notes (0.8.14)
+
+Measured in headless Chromium with 4x CPU throttling, phone viewport.
+
+- `.book-page` has `contain: strict`. Without it, any repaint on the page makes the browser walk every column fragment of the book.
+- The cube overlay is hidden with `opacity`, not `visibility` (inherited, so toggling it restyled and repainted both copies of the book on every turn).
+- A book is laid out once on open: the page size is measured before the HTML goes in, the settings are inline on the book element, the book's fonts load first, and the EPUB stylesheet is a `<style>` (a blob `<link>` loaded late and caused a second layout).
+- The loading spinner only animates `transform`, so it runs on the compositor while the book loads.
+
+Known, not fixed yet:
+- Relayout after a settings change (e.g. font size) is about 20% slower than in 0.8.13 (about 3.4 s vs 2.9 s on Pride and Prejudice at 4x). Not caused by `contain` or the font preloading; cause unknown.
+- Adding a highlight freezes the page (about 0.7 s, or about 10 s in cube mode, where the whole book is cloned twice again). Pre-existing: every change unwraps and rewraps all highlights.
+- Very long books (War and Peace) are still slow: scrolling the book costs time proportional to its length on every frame.

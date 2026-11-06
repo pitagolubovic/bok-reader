@@ -124,6 +124,10 @@
 
         overflow-x: hidden;
         overscroll-behavior: none;
+        /* Without paint containment, every repaint anywhere on the page (page number, menus)
+           makes the browser walk the whole book's column fragments, which costs
+           tens of milliseconds per frame on long books. */
+        contain: strict;
 
         overflow-y: hidden;
         -webkit-overflow-scrolling: touch;
@@ -156,14 +160,18 @@
         contain: layout paint size;
     }
 
+    /* Hidden with opacity rather than visibility: visibility is inherited, so
+       toggling it restyles and repaints both copies of the book on every turn. */
     .page-turn-overlay--primed {
         display: block;
-        visibility: hidden;
+        opacity: 0;
+        will-change: opacity;
     }
 
     .page-turn-overlay--active {
         display: block;
-        visibility: visible;
+        opacity: 1;
+        will-change: opacity;
     }
 
     .page-turn-cube {
