@@ -102,13 +102,6 @@
         font-family: var(--font-family), "Literata", Georgia, "Times New Roman", serif;
         transition: color 350ms ease;
 
-        &.book-page--turning-3d {
-            backface-visibility: hidden;
-            -webkit-backface-visibility: hidden;
-            transform-style: preserve-3d;
-            will-change: transform;
-        }
-
         /* env keepts the main content out of trouble when the book is in fullscreen mode.*/
         padding-top: calc(var(--top-padding) + env(safe-area-inset-top));
         padding-right: calc(var(--side-padding) + env(safe-area-inset-right));
@@ -641,11 +634,6 @@
     .bok-reader-container,
     .bok-reader-container .book-page {
         transition: none;
-    }
-
-    .bok-reader-container .book-page.book-page--turning-3d {
-        filter: none !important;
-        transform: none !important;
     }
 }
 
